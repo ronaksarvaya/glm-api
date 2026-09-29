@@ -1,0 +1,5 @@
+This is a PAN card. Please read the visible text in this document.
+Preserve numbers exactly. Preserve dates exactly. Preserve names exactly.
+Read the document once. Avoid repeating sections.
+Avoid guessing missing information. Return only document text.
+Stop when transcription is complete.

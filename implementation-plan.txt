@@ -1,0 +1,563 @@
+# OCR Dashboard: Process Images Individually
+
+## Objective
+
+Modify the existing OCR dashboard at:
+
+```text
+http://localhost:5000/dashboard
+```
+
+so that images can be processed **one at a time** instead of relying on the existing "Process All" workflow.
+
+The existing OCR backend and GLM-OCR integration are already working and must not be replaced.
+
+The goal is:
+
+```text
+Dashboard
+   ↓
+Select ONE image
+   ↓
+Click "Process"
+   ↓
+Send ONLY that image to OCR API
+   ↓
+GLM-OCR processes it
+   ↓
+Show OCR result
+   ↓
+User chooses another image
+```
+
+---
+
+## 1. Inspect the Existing Dashboard First
+
+Before changing anything, inspect the dashboard implementation completely.
+
+Find:
+
+* Dashboard route
+* HTML/template
+* JavaScript
+* CSS
+* `/dashboard` route in `app.py`
+* Existing "Process All" button
+* Existing JavaScript event handlers
+* Existing API calls
+* Image listing logic
+* Existing processing/status endpoints
+* Result rendering
+* Review functionality
+
+Do not assume the frontend architecture.
+
+Determine exactly why clicking **Process All** currently does nothing.
+
+Check both:
+
+```text
+Browser console
+Network requests
+Flask terminal output
+```
+
+Do not modify code until the current flow is understood.
+
+---
+
+# 2. Preserve "Process All"
+
+Do NOT delete the existing functionality yet.
+
+Keep the existing:
+
+```text
+Process All
+```
+
+button working as it currently does unless there is a clear reason it must be changed.
+
+Add individual processing alongside it.
+
+---
+
+# 3. Add Individual "Process" Button
+
+Each image in the dashboard list should have its own:
+
+```text
+Process
+```
+
+button.
+
+Example:
+
+```text
+┌─────────────────────────────────────────────┐
+│ image_001.jpg                              │
+│ Status: Pending                             │
+│                                             │
+│ [ View ] [ Process ]                        │
+└─────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────┐
+│ image_002.jpg                              │
+│ Status: Pending                             │
+│                                             │
+│ [ View ] [ Process ]                        │
+└─────────────────────────────────────────────┘
+```
+
+Each button must be associated with exactly one image.
+
+---
+
+# 4. Process Only the Selected Image
+
+When the user clicks:
+
+```text
+Process
+```
+
+the frontend must send only that image to the backend.
+
+Do NOT:
+
+* loop over all images
+* call Process All
+* trigger batch processing
+* process multiple images concurrently
+* reprocess unrelated images
+
+The request should identify the specific image being processed.
+
+Use the existing OCR endpoint where possible.
+
+Do not create a duplicate OCR implementation if an existing endpoint already supports single-image processing.
+
+---
+
+# 5. Use the Existing GLM-OCR Pipeline
+
+The individual processing request must go through the existing OCR architecture:
+
+```text
+Dashboard
+    ↓
+Flask endpoint
+    ↓
+get_ocr_engine()
+    ↓
+OCR_ENGINE=glm_ocr
+    ↓
+GlmOcrEngine
+    ↓
+Ollama
+    ↓
+glm-ocr:latest
+```
+
+Do not bypass:
+
+```text
+ocr/service.py
+ocr/glm_ocr.py
+```
+
+Do not directly call Ollama from dashboard JavaScript.
+
+---
+
+# 6. Add Processing State
+
+Each image should have a visible state.
+
+At minimum:
+
+```text
+Pending
+Processing...
+Completed
+Failed
+```
+
+Example:
+
+```text
+image_001.jpg
+
+Status: Processing...
+```
+
+While processing:
+
+* Disable that image's Process button
+* Show a spinner or "Processing..."
+* Prevent accidental duplicate requests
+
+After successful processing:
+
+```text
+Status: Completed
+```
+
+If processing fails:
+
+```text
+Status: Failed
+```
+
+Show a useful error message.
+
+---
+
+# 7. Show Result Immediately
+
+After the selected image finishes processing, update that image's UI.
+
+Display relevant information such as:
+
+```text
+OCR Engine: GLM-OCR
+Model: glm-ocr:latest
+Processing Time: 3.42s
+```
+
+Then show the extracted fields.
+
+For example:
+
+```text
+Name: ...
+PAN Number: ...
+Date of Birth: ...
+```
+
+Use the existing response structure wherever possible.
+
+Do not create a second response format unnecessarily.
+
+---
+
+# 8. Show Raw and Clean OCR Output
+
+Because:
+
+```env
+OCR_DEBUG=true
+```
+
+and the backend already maintains:
+
+```text
+raw_text
+clean_text
+```
+
+provide an optional expandable section in the dashboard:
+
+```text
+▼ Raw OCR Output
+▼ Cleaned OCR Output
+```
+
+This is particularly useful for testing GLM-OCR.
+
+The terminal should continue showing the detailed debug output as well.
+
+---
+
+# 9. Do Not Automatically Process the Next Image
+
+This is important.
+
+After:
+
+```text
+image_001.jpg
+```
+
+finishes, DO NOT automatically process:
+
+```text
+image_002.jpg
+```
+
+The user must manually click:
+
+```text
+Process
+```
+
+for the next image.
+
+Desired workflow:
+
+```text
+User clicks image 1
+        ↓
+Process image 1
+        ↓
+Result displayed
+        ↓
+STOP
+        ↓
+User clicks image 2
+        ↓
+Process image 2
+        ↓
+Result displayed
+```
+
+---
+
+# 10. Prevent Duplicate Processing
+
+If an image is currently being processed:
+
+```text
+Processing...
+```
+
+the user must not be able to start another request for the same image.
+
+After completion, the UI should make it clear that the image has already been processed.
+
+If the existing system supports reprocessing, provide:
+
+```text
+Reprocess
+```
+
+instead of automatically processing again.
+
+Do not silently process the image twice.
+
+---
+
+# 11. Keep Existing Data and Processing Intact
+
+Do NOT:
+
+* delete existing OCR results
+* clear the image directory
+* delete the existing 5,000 records
+* reset the database
+* remove review data
+* modify document extraction rules
+* change GLM-OCR prompts
+* change the OCR engine configuration
+
+This task is only about **individual dashboard processing**.
+
+---
+
+# 12. Fix "Process All" Only If Necessary
+
+The current "Process All" button appears to do nothing.
+
+Investigate why.
+
+Check:
+
+```text
+JavaScript event handler
+API endpoint
+HTTP request
+Flask route
+browser console
+network request
+server logs
+```
+
+If the button is broken because of an existing frontend/backend mismatch, fix it carefully.
+
+However, the individual processing functionality must not depend on Process All.
+
+---
+
+# 13. Add Useful UI Feedback
+
+When processing starts:
+
+```text
+Processing with GLM-OCR...
+```
+
+During processing:
+
+```text
+⏳ Processing...
+```
+
+After success:
+
+```text
+✓ Completed
+```
+
+After failure:
+
+```text
+✕ Failed
+```
+
+If the backend returns processing time:
+
+```text
+Processing time: 4.21 seconds
+```
+
+show it.
+
+---
+
+# 14. Browser Testing
+
+After implementation:
+
+Open:
+
+```text
+http://localhost:5000/dashboard
+```
+
+Do NOT click "Process All" initially.
+
+Instead:
+
+1. Find the first image.
+2. Click its individual `Process` button.
+3. Watch the browser Network tab.
+4. Confirm exactly one request is sent.
+5. Watch the Flask terminal.
+6. Confirm:
+
+```text
+Engine: glm_ocr
+Model: glm-ocr:latest
+```
+
+7. Confirm Ollama processes only that image.
+8. Confirm the result appears for that image.
+9. Confirm no other image starts processing.
+10. Click the second image's `Process` button.
+11. Repeat.
+
+---
+
+# 15. Verify Backend Logs
+
+For each individual request, terminal output should resemble:
+
+```text
+============================================================
+OCR JOB START
+============================================================
+Image       : image_001.jpg
+Type        : PAN
+Engine      : glm_ocr
+Model       : glm-ocr:latest
+...
+============================================================
+OCR JOB COMPLETE
+============================================================
+```
+
+There should be exactly one OCR job for each button click.
+
+---
+
+# 16. Final Desired UI
+
+The dashboard should effectively behave like:
+
+```text
+OCR Dashboard
+
+Total Images: 5000
+
+--------------------------------------------------
+
+image_001.jpg
+Status: Pending
+
+[ Process ]
+
+--------------------------------------------------
+
+image_002.jpg
+Status: Pending
+
+[ Process ]
+
+--------------------------------------------------
+
+image_003.jpg
+Status: Pending
+
+[ Process ]
+
+--------------------------------------------------
+```
+
+After processing image 001:
+
+```text
+image_001.jpg
+Status: ✓ Completed
+Engine: GLM-OCR
+Model: glm-ocr:latest
+Processing Time: 3.42s
+
+Name: ...
+PAN: ...
+DOB: ...
+
+[ Reprocess ]
+[ Raw OCR ]
+[ Cleaned OCR ]
+
+--------------------------------------------------
+
+image_002.jpg
+Status: Pending
+
+[ Process ]
+```
+
+The user then decides when to process image 002.
+
+---
+
+## Important Constraints
+
+* Do not process all images automatically.
+* Do not process images in batches.
+* Do not automatically move to the next image.
+* Do not bypass the existing OCR service.
+* Do not change the working GLM-OCR implementation.
+* Do not delete existing records/results.
+* Do not clear the dashboard cache/database.
+* Do not change existing OCR prompts.
+* Do not modify unrelated functionality.
+* Test with ONE image first.
+
+## Success Criteria
+
+The implementation is complete only when:
+
+1. `/dashboard` loads normally.
+2. Every image has an individual Process action.
+3. Clicking Process sends exactly one image.
+4. GLM-OCR processes exactly that image.
+5. The terminal shows the GLM-OCR debug output.
+6. The dashboard displays the result.
+7. Other images remain untouched.
+8. The user manually chooses when to process the next image.
+9. No duplicate request occurs from a single click.
+10. Existing OCR functionality remains intact.

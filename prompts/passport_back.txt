@@ -1,0 +1,6 @@
+This is a Passport back page. Please read the visible text in this document.
+Preserve numbers exactly. Preserve dates exactly. Preserve names exactly.
+Pay attention to parent/spouse names and the address.
+Read the document once. Avoid repeating sections.
+Avoid guessing missing information. Return only document text.
+Stop when transcription is complete.

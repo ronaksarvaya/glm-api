@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OCR Review Dashboard</title>
+<link rel="stylesheet" href="/dashboard/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">OCR</span>
+    <div>
+      <h1>Review Dashboard</h1>
+      <p class="brand-sub" id="doc-count">Loading images&hellip;</p>
+    </div>
+  </div>
+
+  <div class="stats" id="stats"></div>
+
+  <div class="topbar-actions">
+    <button id="btn-process" class="btn btn-primary">Process All</button>
+    <button id="btn-reprocess" class="btn" disabled>Reprocess All</button>
+    <button id="btn-export" class="btn btn-accent" disabled>Export Review</button>
+    <button id="btn-reset" class="btn btn-ghost" disabled>Reset</button>
+  </div>
+</header>
+
+<div class="progress-strip" id="progress-strip" hidden>
+  <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+  <span class="progress-label" id="progress-label"></span>
+</div>
+
+<main class="layout">
+
+  <!-- LEFT: image list -->
+  <aside class="panel panel-list">
+    <div class="panel-head">
+      <h2>Documents</h2>
+      <span class="chip" id="list-filter" hidden></span>
+    </div>
+    <div class="scroll" id="image-list"></div>
+  </aside>
+
+  <!-- CENTER: viewer -->
+  <section class="panel panel-viewer">
+    <div class="panel-head">
+      <h2 id="viewer-title">No document selected</h2>
+      <div class="zoom-controls">
+        <button class="icon-btn" id="zoom-out" title="Zoom out">&minus;</button>
+        <button class="icon-btn zoom-label" id="zoom-reset" title="Reset zoom">100%</button>
+        <button class="icon-btn" id="zoom-in" title="Zoom in">+</button>
+        <button class="icon-btn" id="zoom-fit" title="Fit to panel">Fit</button>
+      </div>
+    </div>
+
+    <div class="viewer-body" id="viewer-body">
+      <div class="viewer-empty" id="viewer-empty">
+        <p>Select a document from the list.</p>
+      </div>
+      <div class="viewer-stage" id="viewer-stage" hidden>
+        <img id="viewer-img" alt="Selected document">
+      </div>
+    </div>
+
+    <div class="ocr-metadata" id="ocr-metadata" hidden style="margin-top: 10px; font-size: 0.9em; padding: 10px; background: #f5f5f5; border-radius: 4px;"></div>
+
+    <details class="raw-text">
+      <summary>Raw OCR Output</summary>
+      <pre id="raw-text">Not processed yet.</pre>
+    </details>
+
+    <details class="raw-text">
+      <summary>Cleaned OCR Output</summary>
+      <pre id="clean-text">Not processed yet.</pre>
+    </details>
+  </section>
+
+  <!-- RIGHT: fields -->
+  <aside class="panel panel-fields">
+    <div class="panel-head">
+      <h2>Extracted Fields</h2>
+      <span class="chip" id="doctype-chip" hidden></span>
+    </div>
+
+    <div class="scroll">
+      <div class="field-toolbar">
+        <button class="btn btn-sm" id="btn-add-field">+ Add Field</button>
+        <span class="muted" id="field-count"></span>
+      </div>
+
+      <div id="fields"></div>
+
+      <p class="muted empty-note" id="fields-empty">
+        No structured fields detected.
+        You can still add fields manually.
+      </p>
+    </div>
+
+    <div class="fields-foot">
+      <button class="btn btn-block btn-success" id="btn-reviewed">Mark as Reviewed</button>
+    </div>
+  </aside>
+
+</main>
+
+<footer class="navbar">
+  <span class="navpos" id="navpos">0 / 0</span>
+  <div class="navbtns">
+    <button class="btn btn-sm" id="btn-prev">&larr; Previous</button>
+    <button class="btn btn-sm" id="btn-next">Next &rarr;</button>
+  </div>
+  <span class="navhint">Shortcuts: &larr; &rarr; navigate &middot; Ctrl+S save &middot; R reviewed</span>
+  <button class="btn btn-sm btn-ghost" id="btn-summary">Correction Summary</button>
+</footer>
+
+<div class="modal-backdrop" id="summary-modal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h2>Correction Summary</h2>
+      <button class="icon-btn" id="summary-close">&times;</button>
+    </div>
+    <div class="modal-body" id="summary-body"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="/dashboard/app.js"></script>
+</body>
+</html>
