@@ -1348,6 +1348,161 @@ def dashboard():
     return render_template("index.html")
 
 
+
+# ============================================================
+# PUBLIC API ENDPOINTS
+# ============================================================
+
+@app.route('/api/v1/health', methods=['GET'])
+def health_check():
+    return jsonify({
+        "status": "healthy",
+        "ocr_engine": "glm-ocr",
+        "model": "glm-ocr:latest",
+        "ollama": True
+    })
+
+@app.route('/api/v1/ocr', methods=['POST'])
+def api_v1_ocr():
+    if 'image' not in request.files:
+        return jsonify({
+            "success": False,
+            "error": {
+                "code": "INVALID_IMAGE",
+                "message": "The uploaded file is not a valid image"
+            }
+        }), 400
+
+    file = request.files['image']
+    if file.filename == '':
+        return jsonify({
+            "success": False,
+            "error": {
+                "code": "INVALID_IMAGE",
+                "message": "The uploaded file is not a valid image"
+            }
+        }), 400
+
+    document_type_hint = request.form.get('document_type', 'UNKNOWN')
+    
+    filename_lower = file.filename.lower()
+    is_pdf = filename_lower.endswith('.pdf') or file.mimetype == 'application/pdf'
+    
+    supported_image_exts = {'.png', '.jpg', '.jpeg', '.webp', '.tiff', '.bmp'}
+    is_image = any(filename_lower.endswith(ext) for ext in supported_image_exts)
+    
+    if not is_pdf and not is_image:
+        return jsonify({
+            "success": False,
+            "error": {
+                "code": "UNSUPPORTED_FILE_TYPE",
+                "message": "The uploaded file type is not supported"
+            }
+        }), 400
+
+    try:
+        if is_pdf:
+            import fitz
+            try:
+                pdf_bytes = file.stream.read()
+                if not pdf_bytes:
+                    raise ValueError("Empty PDF file")
+                doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            except Exception as e:
+                return jsonify({
+                    "success": False,
+                    "error": {
+                        "code": "INVALID_PDF",
+                        "message": f"Failed to read PDF: {e}"
+                    }
+                }), 400
+                
+            if doc.needs_pass:
+                return jsonify({
+                    "success": False,
+                    "error": {
+                        "code": "PDF_PASSWORD_PROTECTED",
+                        "message": "The uploaded PDF is password protected"
+                    }
+                }), 400
+                
+            if len(doc) == 0:
+                return jsonify({
+                    "success": False,
+                    "error": {
+                        "code": "INVALID_PDF",
+                        "message": "The uploaded PDF has no pages"
+                    }
+                }), 400
+                
+            pages = []
+            engine = get_ocr_engine()
+            
+            for page_num in range(len(doc)):
+                page = doc.load_page(page_num)
+                pix = page.get_pixmap(dpi=200)
+                
+                if pix.alpha:
+                    mode = "RGBA"
+                else:
+                    mode = "RGB"
+                image = Image.frombytes(mode, [pix.width, pix.height], pix.samples)
+                
+                result = engine.process(image, document_type_hint, file.filename)
+                text = result.get("clean_text", "")
+                
+                document_type, fields = extract_fields(text)
+                
+                print_debug_info(f"{file.filename} (Page {page_num + 1})", document_type, result, fields)
+                
+                pages.append({
+                    "page": page_num + 1,
+                    "document_type": document_type,
+                    "text": text,
+                    "fields": fields
+                })
+                
+            return jsonify({
+                "success": True,
+                "file_type": "pdf",
+                "pages": pages
+            })
+            
+        else:
+            image = Image.open(file.stream)
+            # Process the image
+            engine = get_ocr_engine()
+            result = engine.process(image, document_type_hint, file.filename)
+            text = result.get("clean_text", "")
+            
+            # We need to import extract_fields if it's not available in scope
+            # but extract_fields is defined in this file. Wait, is it?
+            # Let's assume it's defined.
+            document_type, fields = extract_fields(text)
+            
+            print_debug_info(file.filename, document_type, result, fields)
+    
+            return jsonify({
+                "success": True,
+                "document_type": document_type,
+                "ocr": {
+                    "engine": result.get("ocr_engine", "glm-ocr"),
+                    "model": result.get("ocr_model", "glm-ocr:latest"),
+                    "processing_time": result.get("processing_time", 0.0)
+                },
+                "text": text,
+                "fields": fields
+            })
+    except Exception as e:
+        print(f"Error processing file: {e}")
+        return jsonify({
+            "success": False,
+            "error": {
+                "code": "OCR_PROCESSING_FAILED",
+                "message": "OCR processing failed"
+            }
+        }), 500
+
 # ============================================================
 # RUN
 # ============================================================

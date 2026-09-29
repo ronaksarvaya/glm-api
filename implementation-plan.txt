@@ -1,563 +1,192 @@
-# OCR Dashboard: Process Images Individually
+IMPLEMENTATION PLAN — Add PDF Input Support
 
-## Objective
+OBJECTIVE
 
-Modify the existing OCR dashboard at:
+Extend the existing OCR server so /api/v1/ocr accepts both:
 
-```text
-http://localhost:5000/dashboard
-```
+- image files
+- PDF files
 
-so that images can be processed **one at a time** instead of relying on the existing "Process All" workflow.
+Do NOT break the existing image OCR pipeline.
 
-The existing OCR backend and GLM-OCR integration are already working and must not be replaced.
+CURRENT PROBLEM
 
-The goal is:
+Uploading a PDF currently reaches the PIL image loader and fails with:
 
-```text
-Dashboard
-   ↓
-Select ONE image
-   ↓
-Click "Process"
-   ↓
-Send ONLY that image to OCR API
-   ↓
-GLM-OCR processes it
-   ↓
-Show OCR result
-   ↓
-User chooses another image
-```
+    cannot identify image file <tempfile.SpooledTemporaryFile>
 
----
+This means the endpoint currently assumes every uploaded file is an image.
 
-## 1. Inspect the Existing Dashboard First
+IMPLEMENTATION
 
-Before changing anything, inspect the dashboard implementation completely.
+1. Detect the uploaded file type before passing it to PIL.
 
-Find:
+Supported:
 
-* Dashboard route
-* HTML/template
-* JavaScript
-* CSS
-* `/dashboard` route in `app.py`
-* Existing "Process All" button
-* Existing JavaScript event handlers
-* Existing API calls
-* Image listing logic
-* Existing processing/status endpoints
-* Result rendering
-* Review functionality
+    Images:
+      PNG
+      JPG/JPEG
+      WEBP
+      TIFF
+      BMP
 
-Do not assume the frontend architecture.
+    PDF:
+      application/pdf
+      .pdf
 
-Determine exactly why clicking **Process All** currently does nothing.
+2. Keep the existing image path completely unchanged.
 
-Check both:
+3. For PDF files:
 
-```text
-Browser console
-Network requests
-Flask terminal output
-```
-
-Do not modify code until the current flow is understood.
-
----
-
-# 2. Preserve "Process All"
-
-Do NOT delete the existing functionality yet.
-
-Keep the existing:
-
-```text
-Process All
-```
-
-button working as it currently does unless there is a clear reason it must be changed.
-
-Add individual processing alongside it.
-
----
-
-# 3. Add Individual "Process" Button
-
-Each image in the dashboard list should have its own:
-
-```text
-Process
-```
-
-button.
-
-Example:
-
-```text
-┌─────────────────────────────────────────────┐
-│ image_001.jpg                              │
-│ Status: Pending                             │
-│                                             │
-│ [ View ] [ Process ]                        │
-└─────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────┐
-│ image_002.jpg                              │
-│ Status: Pending                             │
-│                                             │
-│ [ View ] [ Process ]                        │
-└─────────────────────────────────────────────┘
-```
-
-Each button must be associated with exactly one image.
-
----
-
-# 4. Process Only the Selected Image
-
-When the user clicks:
-
-```text
-Process
-```
-
-the frontend must send only that image to the backend.
-
-Do NOT:
-
-* loop over all images
-* call Process All
-* trigger batch processing
-* process multiple images concurrently
-* reprocess unrelated images
-
-The request should identify the specific image being processed.
-
-Use the existing OCR endpoint where possible.
-
-Do not create a duplicate OCR implementation if an existing endpoint already supports single-image processing.
-
----
-
-# 5. Use the Existing GLM-OCR Pipeline
-
-The individual processing request must go through the existing OCR architecture:
-
-```text
-Dashboard
-    ↓
-Flask endpoint
-    ↓
-get_ocr_engine()
-    ↓
-OCR_ENGINE=glm_ocr
-    ↓
-GlmOcrEngine
-    ↓
-Ollama
-    ↓
-glm-ocr:latest
-```
-
-Do not bypass:
-
-```text
-ocr/service.py
-ocr/glm_ocr.py
-```
-
-Do not directly call Ollama from dashboard JavaScript.
-
----
-
-# 6. Add Processing State
-
-Each image should have a visible state.
-
-At minimum:
-
-```text
-Pending
-Processing...
-Completed
-Failed
-```
-
-Example:
-
-```text
-image_001.jpg
-
-Status: Processing...
-```
-
-While processing:
-
-* Disable that image's Process button
-* Show a spinner or "Processing..."
-* Prevent accidental duplicate requests
-
-After successful processing:
-
-```text
-Status: Completed
-```
-
-If processing fails:
-
-```text
-Status: Failed
-```
-
-Show a useful error message.
-
----
-
-# 7. Show Result Immediately
-
-After the selected image finishes processing, update that image's UI.
-
-Display relevant information such as:
-
-```text
-OCR Engine: GLM-OCR
-Model: glm-ocr:latest
-Processing Time: 3.42s
-```
-
-Then show the extracted fields.
-
-For example:
-
-```text
-Name: ...
-PAN Number: ...
-Date of Birth: ...
-```
-
-Use the existing response structure wherever possible.
-
-Do not create a second response format unnecessarily.
-
----
-
-# 8. Show Raw and Clean OCR Output
-
-Because:
-
-```env
-OCR_DEBUG=true
-```
-
-and the backend already maintains:
-
-```text
-raw_text
-clean_text
-```
-
-provide an optional expandable section in the dashboard:
-
-```text
-▼ Raw OCR Output
-▼ Cleaned OCR Output
-```
-
-This is particularly useful for testing GLM-OCR.
-
-The terminal should continue showing the detailed debug output as well.
-
----
-
-# 9. Do Not Automatically Process the Next Image
-
-This is important.
-
-After:
-
-```text
-image_001.jpg
-```
-
-finishes, DO NOT automatically process:
-
-```text
-image_002.jpg
-```
-
-The user must manually click:
-
-```text
-Process
-```
-
-for the next image.
-
-Desired workflow:
-
-```text
-User clicks image 1
+    uploaded PDF
         ↓
-Process image 1
+    render each page to an image
         ↓
-Result displayed
+    pass each page through the EXISTING OCR pipeline
         ↓
-STOP
+    collect OCR results
         ↓
-User clicks image 2
-        ↓
-Process image 2
-        ↓
-Result displayed
-```
+    return combined page results
 
----
+4. Use PyMuPDF (`fitz`) for PDF rendering.
 
-# 10. Prevent Duplicate Processing
+Install:
 
-If an image is currently being processed:
+    .\venv\Scripts\python.exe -m pip install pymupdf
 
-```text
-Processing...
-```
+Do not require Poppler if PyMuPDF can handle the rendering directly.
 
-the user must not be able to start another request for the same image.
+5. Render PDF pages at a suitable DPI.
 
-After completion, the UI should make it clear that the image has already been processed.
+Start with approximately 200–250 DPI.
 
-If the existing system supports reprocessing, provide:
+Do not unnecessarily render at extremely high resolution because OCR performance matters.
 
-```text
-Reprocess
-```
+6. Each PDF page must go through the same preprocessing/OCR pipeline currently used for images.
 
-instead of automatically processing again.
+Do NOT create a separate OCR implementation for PDFs.
 
-Do not silently process the image twice.
+The flow should effectively be:
 
----
+    PDF page
+       ↓
+    PIL Image
+       ↓
+    existing adaptive OCR
+       ↓
+    existing document/parser logic
 
-# 11. Keep Existing Data and Processing Intact
+7. Return page-level results.
 
-Do NOT:
+Use a structure similar to:
 
-* delete existing OCR results
-* clear the image directory
-* delete the existing 5,000 records
-* reset the database
-* remove review data
-* modify document extraction rules
-* change GLM-OCR prompts
-* change the OCR engine configuration
+{
+    "success": true,
+    "file_type": "pdf",
+    "pages": [
+        {
+            "page": 1,
+            "document_type": "...",
+            "text": "...",
+            "fields": {...}
+        },
+        {
+            "page": 2,
+            "document_type": "...",
+            "text": "...",
+            "fields": {...}
+        }
+    ]
+}
 
-This task is only about **individual dashboard processing**.
+Preserve the existing response structure as much as possible for normal image uploads.
 
----
+8. Do not modify:
 
-# 12. Fix "Process All" Only If Necessary
+    - Passport Front parser
+    - Passport Back parser
+    - PAN parser
+    - adaptive preprocessing
+    - MRZ authority logic
+    - OCR candidate scoring
+    - dashboard behavior
 
-The current "Process All" button appears to do nothing.
+unless absolutely necessary to support page-level PDF results.
 
-Investigate why.
+9. Add clear validation:
 
-Check:
+    - reject unsupported file types
+    - handle empty PDFs
+    - handle corrupted PDFs
+    - handle password-protected PDFs gracefully
+    - return a useful HTTP error instead of a Python traceback
 
-```text
-JavaScript event handler
-API endpoint
-HTTP request
-Flask route
-browser console
-network request
-server logs
-```
+10. Do not save uploaded PDFs permanently unless the existing application
+    already requires that behavior.
 
-If the button is broken because of an existing frontend/backend mismatch, fix it carefully.
+Prefer processing PDF pages in memory.
 
-However, the individual processing functionality must not depend on Process All.
+TESTING
 
----
+Test the existing image endpoint first:
 
-# 13. Add Useful UI Feedback
+    PNG
+    JPG/JPEG
 
-When processing starts:
+Expected:
+    existing behavior unchanged.
 
-```text
-Processing with GLM-OCR...
-```
+Then test:
 
-During processing:
+    1-page PDF
+    multi-page PDF
 
-```text
-⏳ Processing...
-```
+Verify:
 
-After success:
+    page count
+    OCR text per page
+    extracted fields per page
+    document classification per page
 
-```text
-✓ Completed
-```
+Also test a PDF containing:
 
-After failure:
+    Passport Front
+    Passport Back
+    PAN
 
-```text
-✕ Failed
-```
+if available.
 
-If the backend returns processing time:
+REGRESSION
 
-```text
-Processing time: 4.21 seconds
-```
+Run:
 
-show it.
+    Passport Front regression
+    Passport Back regression
+    PAN regression
+    full 20-image regression
 
----
+Expected:
 
-# 14. Browser Testing
+    0 document-type regressions
+    0 field regressions
 
-After implementation:
+PERFORMANCE
 
-Open:
+Measure:
 
-```text
-http://localhost:5000/dashboard
-```
+    image OCR time
+    PDF page rendering time
+    OCR time per PDF page
+    total PDF processing time
 
-Do NOT click "Process All" initially.
+Do not optimize prematurely.
 
-Instead:
+IMPORTANT
 
-1. Find the first image.
-2. Click its individual `Process` button.
-3. Watch the browser Network tab.
-4. Confirm exactly one request is sent.
-5. Watch the Flask terminal.
-6. Confirm:
+The existing image OCR pipeline is working.
 
-```text
-Engine: glm_ocr
-Model: glm-ocr:latest
-```
+PDF support should be an INPUT/CONVERSION layer:
 
-7. Confirm Ollama processes only that image.
-8. Confirm the result appears for that image.
-9. Confirm no other image starts processing.
-10. Click the second image's `Process` button.
-11. Repeat.
+    PDF → page image → existing OCR pipeline
 
----
-
-# 15. Verify Backend Logs
-
-For each individual request, terminal output should resemble:
-
-```text
-============================================================
-OCR JOB START
-============================================================
-Image       : image_001.jpg
-Type        : PAN
-Engine      : glm_ocr
-Model       : glm-ocr:latest
-...
-============================================================
-OCR JOB COMPLETE
-============================================================
-```
-
-There should be exactly one OCR job for each button click.
-
----
-
-# 16. Final Desired UI
-
-The dashboard should effectively behave like:
-
-```text
-OCR Dashboard
-
-Total Images: 5000
-
---------------------------------------------------
-
-image_001.jpg
-Status: Pending
-
-[ Process ]
-
---------------------------------------------------
-
-image_002.jpg
-Status: Pending
-
-[ Process ]
-
---------------------------------------------------
-
-image_003.jpg
-Status: Pending
-
-[ Process ]
-
---------------------------------------------------
-```
-
-After processing image 001:
-
-```text
-image_001.jpg
-Status: ✓ Completed
-Engine: GLM-OCR
-Model: glm-ocr:latest
-Processing Time: 3.42s
-
-Name: ...
-PAN: ...
-DOB: ...
-
-[ Reprocess ]
-[ Raw OCR ]
-[ Cleaned OCR ]
-
---------------------------------------------------
-
-image_002.jpg
-Status: Pending
-
-[ Process ]
-```
-
-The user then decides when to process image 002.
-
----
-
-## Important Constraints
-
-* Do not process all images automatically.
-* Do not process images in batches.
-* Do not automatically move to the next image.
-* Do not bypass the existing OCR service.
-* Do not change the working GLM-OCR implementation.
-* Do not delete existing records/results.
-* Do not clear the dashboard cache/database.
-* Do not change existing OCR prompts.
-* Do not modify unrelated functionality.
-* Test with ONE image first.
-
-## Success Criteria
-
-The implementation is complete only when:
-
-1. `/dashboard` loads normally.
-2. Every image has an individual Process action.
-3. Clicking Process sends exactly one image.
-4. GLM-OCR processes exactly that image.
-5. The terminal shows the GLM-OCR debug output.
-6. The dashboard displays the result.
-7. Other images remain untouched.
-8. The user manually chooses when to process the next image.
-9. No duplicate request occurs from a single click.
-10. Existing OCR functionality remains intact.
+Do not rewrite the OCR engine or parsers to support PDFs directly.
