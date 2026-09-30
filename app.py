@@ -1,6 +1,7 @@
 import os
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
+print(f"[OCR] Configured engine: {os.environ.get('OCR_ENGINE', 'glm_ocr').strip().lower()}")
 
 from flask import (
     Flask,
@@ -14,6 +15,7 @@ from PIL import Image, ImageChops, ImageEnhance, ImageFilter, ImageOps
 import pytesseract
 import re
 import os
+import uuid
 from datetime import datetime
 import json
 from io import BytesIO
@@ -24,6 +26,21 @@ app = Flask(
     __name__,
     template_folder="dashboard",
     static_folder="dashboard"
+)
+
+from flask_cors import CORS
+
+frontend_origins = os.environ.get("FRONTEND_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+CORS(
+    app,
+    resources={
+        r"/ocr": {
+            "origins": frontend_origins
+        },
+        r"/health": {
+            "origins": frontend_origins
+        }
+    }
 )
 
 pytesseract.pytesseract.tesseract_cmd = (
@@ -947,6 +964,13 @@ def extract_pan(text):
 # API
 # ============================================================
 
+@app.get("/health")
+def health():
+    return jsonify({
+        "status": "ok",
+        "service": "ocr-server"
+    })
+
 @app.get("/health/ocr")
 def health_ocr():
     engine = get_ocr_engine()
@@ -1006,81 +1030,146 @@ def home():
 
 
 @app.post("/ocr")
+@app.post("/ocr")
 def ocr():
-
+    req_id = str(uuid.uuid4())[:8]
+    print(f"[API] POST /ocr")
+    
     if "file" not in request.files:
-
+        print(f"[API] request_id={req_id}")
+        print(f"[API] status=400")
+        print(f"[API] error=FILE_REQUIRED")
         return jsonify({
             "success": False,
-            "error": "No file uploaded"
+            "error": {
+                "code": "FILE_REQUIRED",
+                "message": "No file was provided"
+            }
         }), 400
 
     file = request.files["file"]
+    print(f"[API] filename={file.filename}")
+    print(f"[API] content_type={file.content_type}")
+    print(f"[API] request_id={req_id}")
 
     if not file.filename:
-
+        print(f"[API] status=400")
+        print(f"[API] error=FILE_REQUIRED")
         return jsonify({
             "success": False,
-            "error": "Empty filename"
+            "error": {
+                "code": "FILE_REQUIRED",
+                "message": "No file was provided"
+            }
         }), 400
 
     try:
-
-        image = Image.open(file.stream)
-
-        # Get OCR engine
         engine = get_ocr_engine()
+        ext = os.path.splitext(file.filename)[1].lower()
         
-        # First, we need to know the document type.
-        # But we don't know it yet. We could use existing engine to detect type first,
-        # or we could use the new engine and detect from raw text.
-        # Wait, if we use GLM-OCR, we want to use specific prompts.
-        # Let's run a fast detection using existing Tesseract on a low-res image?
-        # Or just use "UNKNOWN" first.
-        # Let's run the OCR. The instructions say "if the project determines PAN then use pan.txt".
-        # We will use "UNKNOWN" to get a generic read, detect, and if we really wanted to we could re-run.
-        # For this implementation, we will just pass "UNKNOWN" to let the adapter decide, or we can use existing app.detect_document.
-        # Actually, let's just pass "UNKNOWN" and let detect_document run on the clean_text.
+        supported_exts = getattr(engine, "supported_extensions", {".png", ".jpg", ".jpeg", ".webp", ".tiff", ".bmp", ".tif", ".pdf"})
         
-        result = engine.process(image, "UNKNOWN", file.filename)
-        text = result["clean_text"]
+        if ext not in supported_exts:
+            print(f"[API] status=415")
+            print(f"[API] error=UNSUPPORTED_FILE_TYPE")
+            return jsonify({
+                "success": False,
+                "error": {
+                    "code": "UNSUPPORTED_FILE_TYPE",
+                    "message": f"Unsupported file type: {ext}"
+                }
+            }), 415
 
-        # Detect document
-        document_type = detect_document(text)
-
-        # Extract fields
-        if document_type == "PASSPORT_FRONT":
-            fields = extract_passport_front(text)
-        elif document_type == "PASSPORT_BACK":
-            fields = extract_passport_back(text)
-        elif document_type == "PAN":
-            fields = extract_pan(text)
+        is_paddle = engine.__class__.__name__ == "PaddleOcrEngine"
+        if is_paddle:
+            import tempfile
+            fd, temp_path = tempfile.mkstemp(suffix=ext)
+            os.close(fd)
+            try:
+                file.save(temp_path)
+                result = engine.process_file(temp_path, "UNKNOWN", file.filename)
+                
+                # If it's a PDF, we format it as well.
+                # PaddleOcrEngine returns 'full_text' or similar for PDF.
+                text = result.get("clean_text", result.get("full_text", ""))
+                document_type = detect_document(text)
+                
+                if document_type == "PASSPORT_FRONT":
+                    fields = extract_passport_front(text)
+                elif document_type == "PASSPORT_BACK":
+                    fields = extract_passport_back(text)
+                elif document_type == "PAN":
+                    fields = extract_pan(text)
+                else:
+                    fields = {}
+                    
+                print_debug_info(file.filename, document_type, result, fields)
+                
+                print(f"[API] request_id={req_id}")
+                print(f"[API] status=200")
+                print(f"[API] document_type={document_type}")
+                print(f"[API] processing_time={result.get('processing_time', 0)}s")
+                
+                return jsonify({
+                    "success": True,
+                    "filename": file.filename,
+                    "document_type": document_type,
+                    "engine": result.get("ocr_engine"),
+                    "processing_time": result.get("processing_time"),
+                    "data": fields,
+                    "raw_text": result.get("raw_text", ""),
+                    "message": "OCR completed successfully"
+                })
+            finally:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
         else:
-            fields = {}
+            image = Image.open(file.stream)
+            result = engine.process(image, "UNKNOWN", file.filename)
+            text = result.get("clean_text", "")
             
-        print_debug_info(file.filename, document_type, result, fields)
-
-        return jsonify({
-            "success": True,
-            "document": {
-                "type": document_type
-            },
-            "fields": fields,
-            "raw_text": result["raw_text"],
-            "clean_text": text,
-            "ocr_metadata": {
-                "engine": result["ocr_engine"],
-                "model": result["ocr_model"],
-                "processing_time": result["processing_time"]
-            },
-            "filename": file.filename
-        })
+            # Detect document
+            document_type = detect_document(text)
+            
+            # Extract fields
+            if document_type == "PASSPORT_FRONT":
+                fields = extract_passport_front(text)
+            elif document_type == "PASSPORT_BACK":
+                fields = extract_passport_back(text)
+            elif document_type == "PAN":
+                fields = extract_pan(text)
+            else:
+                fields = {}
+                
+            print_debug_info(file.filename, document_type, result, fields)
+            
+            print(f"[API] request_id={req_id}")
+            print(f"[API] status=200")
+            print(f"[API] document_type={document_type}")
+            print(f"[API] processing_time={result.get('processing_time', 0)}s")
+            
+            return jsonify({
+                "success": True,
+                "filename": file.filename,
+                "document_type": document_type,
+                "engine": result.get("ocr_engine"),
+                "processing_time": result.get("processing_time"),
+                "data": fields,
+                "raw_text": result.get("raw_text", ""),
+                "message": "OCR completed successfully"
+            })
 
     except Exception as e:
-
+        print(f"[API] request_id={req_id}")
+        print(f"[API] status=500")
+        print(f"[API] error=OCR_PROCESSING_FAILED")
+        traceback.print_exc()
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": {
+                "code": "OCR_PROCESSING_FAILED",
+                "message": str(e)
+            }
         }), 500
 
 
@@ -1348,6 +1437,69 @@ def dashboard():
     return render_template("index.html")
 
 
+@app.post("/paddle-test")
+def paddle_test_post():
+    if "file" not in request.files:
+        return jsonify({"success": False, "error": "No file uploaded"}), 400
+    file = request.files["file"]
+    if not file.filename:
+        return jsonify({"success": False, "error": "Empty filename"}), 400
+    try:
+        from ocr.paddle_ocr import PaddleOcrEngine
+        engine = PaddleOcrEngine()
+        ext = os.path.splitext(file.filename)[1].lower()
+        supported_exts = getattr(engine, "supported_extensions", {".png", ".jpg", ".jpeg", ".webp", ".tiff", ".bmp", ".tif"})
+        if ext not in supported_exts:
+            return jsonify({"success": False, "error": "File type not supported by PaddleOCR"}), 400
+        
+        import tempfile
+        fd, temp_path = tempfile.mkstemp(suffix=ext)
+        os.close(fd)
+        try:
+            file.save(temp_path)
+            result = engine.process_file(temp_path, "UNKNOWN", file.filename)
+            if file.filename.lower().endswith('.pdf'):
+                return jsonify(result)
+            text = result["clean_text"]
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+        document_type = detect_document(text)
+        if document_type == "PASSPORT_FRONT":
+            fields = extract_passport_front(text)
+        elif document_type == "PASSPORT_BACK":
+            fields = extract_passport_back(text)
+        elif document_type == "PAN":
+            fields = extract_pan(text)
+        else:
+            fields = {}
+            
+        print_debug_info(file.filename, document_type, result, fields)
+
+        return jsonify({
+            "success": True,
+            "document": {"type": document_type},
+            "fields": fields,
+            "raw_text": result["raw_text"],
+            "clean_text": text,
+            "ocr_metadata": {
+                "engine": result["ocr_engine"],
+                "model": result["ocr_model"],
+                "processing_time": result["processing_time"]
+            },
+            "filename": file.filename
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.get("/paddle-test")
+def paddle_test():
+    return render_template("paddle_test.html")
+
+
 
 # ============================================================
 # PUBLIC API ENDPOINTS
@@ -1494,12 +1646,17 @@ def api_v1_ocr():
                 "fields": fields
             })
     except Exception as e:
-        print(f"Error processing file: {e}")
+        import traceback
+
+        print("\n========== OCR ERROR ==========")
+        traceback.print_exc()
+        print("================================\n")
+
         return jsonify({
             "success": False,
             "error": {
                 "code": "OCR_PROCESSING_FAILED",
-                "message": "OCR processing failed"
+                "message": str(e)
             }
         }), 500
 

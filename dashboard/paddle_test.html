@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PaddleOCR Test Dashboard</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; color: #333; margin: 0; padding: 20px; }
+        .container { max-width: 900px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h1 { color: #2c3e50; text-align: center; }
+        .upload-area { border: 2px dashed #3498db; padding: 40px; text-align: center; border-radius: 8px; background: #ecf0f1; cursor: pointer; margin-bottom: 20px; transition: background 0.3s; }
+        .upload-area:hover { background: #e0e6ed; }
+        .upload-area.dragover { background: #d6eaf8; border-color: #2980b9; }
+        .btn { background: #3498db; color: white; border: none; padding: 12px 24px; font-size: 16px; border-radius: 5px; cursor: pointer; transition: background 0.3s; }
+        .btn:hover { background: #2980b9; }
+        .btn:disabled { background: #95a5a6; cursor: not-allowed; }
+        .result-area { margin-top: 30px; display: none; }
+        .stats { display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 20px; }
+        .stat-box { background: #f8f9fa; border: 1px solid #dee2e6; padding: 15px; border-radius: 5px; flex: 1; min-width: 150px; text-align: center; }
+        .stat-label { font-size: 12px; color: #6c757d; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
+        .stat-value { font-size: 18px; font-weight: bold; color: #2c3e50; }
+        .page-result { background: #fdfdfd; border: 1px solid #eee; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        .page-title { border-bottom: 2px solid #3498db; padding-bottom: 10px; margin-bottom: 15px; color: #2980b9; }
+        pre { background: #2b2b2b; color: #f8f8f2; padding: 15px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap; font-family: 'Consolas', monospace; }
+        .loader { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; margin: 20px auto; display: none; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .error { color: #e74c3c; padding: 15px; background: #fadbd8; border-radius: 5px; margin-top: 20px; display: none; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>PaddleOCR Test Dashboard</h1>
+    
+    <div class="upload-area" id="drop-zone">
+        <p>Drag & Drop an image or PDF here</p>
+        <p>or</p>
+        <input type="file" id="file-input" style="display: none;" accept=".jpg,.jpeg,.png,.webp,.bmp,.tiff,.tif,.pdf">
+        <button class="btn" onclick="document.getElementById('file-input').click()">Select File</button>
+        <p id="file-name" style="margin-top: 15px; font-weight: bold; color: #2c3e50;"></p>
+    </div>
+
+    <div style="text-align: center;">
+        <button class="btn" id="process-btn" disabled>Process with PaddleOCR</button>
+    </div>
+
+    <div class="loader" id="loader"></div>
+    <div class="error" id="error-msg"></div>
+
+    <div class="result-area" id="result-area">
+        <div class="stats">
+            <div class="stat-box">
+                <div class="stat-label">Filename</div>
+                <div class="stat-value" id="res-filename">-</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">File Type</div>
+                <div class="stat-value" id="res-type">-</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Pages</div>
+                <div class="stat-value" id="res-pages">-</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Processing Time</div>
+                <div class="stat-value" id="res-time">-</div>
+            </div>
+        </div>
+
+        <div id="pages-container"></div>
+    </div>
+</div>
+
+<script>
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+    const fileNameDisplay = document.getElementById('file-name');
+    const processBtn = document.getElementById('process-btn');
+    const loader = document.getElementById('loader');
+    const resultArea = document.getElementById('result-area');
+    const errorMsg = document.getElementById('error-msg');
+    const pagesContainer = document.getElementById('pages-container');
+
+    let selectedFile = null;
+
+    // Handle drag and drop
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('dragover');
+    });
+
+    dropZone.addEventListener('dragleave', () => {
+        dropZone.classList.remove('dragover');
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        if (e.dataTransfer.files.length > 0) {
+            handleFileSelect(e.dataTransfer.files[0]);
+        }
+    });
+
+    fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) {
+            handleFileSelect(e.target.files[0]);
+        }
+    });
+
+    function handleFileSelect(file) {
+        selectedFile = file;
+        fileNameDisplay.textContent = `Selected: ${file.name}`;
+        processBtn.disabled = false;
+        resultArea.style.display = 'none';
+        errorMsg.style.display = 'none';
+    }
+
+    processBtn.addEventListener('click', async () => {
+        if (!selectedFile) return;
+
+        const formData = new FormData();
+        formData.append('file', selectedFile);
+
+        processBtn.disabled = true;
+        loader.style.display = 'block';
+        resultArea.style.display = 'none';
+        errorMsg.style.display = 'none';
+        pagesContainer.innerHTML = '';
+
+        try {
+            const response = await fetch('/paddle-test', {
+                method: 'POST',
+                body: formData
+            });
+
+            const data = await response.json();
+
+            if (!data.success && !data.ocr_metadata && !data.pages) {
+                throw new Error(data.error || 'Processing failed');
+            }
+
+            displayResult(data, selectedFile.name);
+
+        } catch (err) {
+            errorMsg.textContent = err.message;
+            errorMsg.style.display = 'block';
+        } finally {
+            processBtn.disabled = false;
+            loader.style.display = 'none';
+        }
+    });
+
+    function displayResult(data, filename) {
+        resultArea.style.display = 'block';
+        
+        const isPdf = filename.toLowerCase().endsWith('.pdf');
+        
+        document.getElementById('res-filename').textContent = data.filename || filename;
+        document.getElementById('res-type').textContent = isPdf ? 'PDF' : 'Image';
+        
+        if (isPdf && data.pages) {
+            document.getElementById('res-pages').textContent = data.page_count || data.pages.length;
+            document.getElementById('res-time').textContent = data.processing_time ? `${data.processing_time.toFixed(2)} sec` : '-';
+            
+            data.pages.forEach(page => {
+                const pageDiv = document.createElement('div');
+                pageDiv.className = 'page-result';
+                pageDiv.innerHTML = `
+                    <h3 class="page-title">Page ${page.page}</h3>
+                    <pre>${page.text || 'No text extracted'}</pre>
+                `;
+                pagesContainer.appendChild(pageDiv);
+            });
+        } else {
+            // Image result
+            document.getElementById('res-pages').textContent = '1';
+            const time = data.ocr_metadata ? data.ocr_metadata.processing_time : data.processing_time;
+            document.getElementById('res-time').textContent = time ? `${time.toFixed(2)} sec` : '-';
+            
+            const text = data.clean_text || data.text || '';
+            const characters = text.length;
+            const blocks = text.split('\\n').filter(l => l.trim().length > 0).length;
+            
+            const statsHtml = `
+                <div class="stats" style="margin-top: 10px; background: #eaf2f8; padding: 10px; border-radius: 5px;">
+                    <div style="margin-right: 20px;"><strong>Characters:</strong> ${characters}</div>
+                    <div><strong>Text Blocks:</strong> ${blocks}</div>
+                </div>
+            `;
+            
+            const pageDiv = document.createElement('div');
+            pageDiv.className = 'page-result';
+            pageDiv.innerHTML = `
+                <h3 class="page-title">Extracted Text</h3>
+                ${statsHtml}
+                <pre style="margin-top: 15px;">${text || 'No text extracted'}</pre>
+            `;
+            pagesContainer.appendChild(pageDiv);
+        }
+    }
+</script>
+</body>
+</html>

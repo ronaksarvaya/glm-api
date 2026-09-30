@@ -1,192 +1,766 @@
-IMPLEMENTATION PLAN — Add PDF Input Support
+# OCR Server Implementation Plan
 
-OBJECTIVE
+## Objective
 
-Extend the existing OCR server so /api/v1/ocr accepts both:
+Update the existing `ocr-server` so that it reliably serves OCR requests from the `my-ocr-parser` frontend.
 
-- image files
-- PDF files
+The server is already successfully processing:
 
-Do NOT break the existing image OCR pipeline.
+* PDF invoices
+* Passport images
+* PAN images
+* PaddleOCR extraction
 
-CURRENT PROBLEM
+Do not replace the existing OCR engine or processing pipeline.
 
-Uploading a PDF currently reaches the PIL image loader and fails with:
+The primary goal is to make the `/ocr` API a reliable frontend-consumable API, including proper CORS configuration, consistent JSON responses, error responses, and request logging.
 
-    cannot identify image file <tempfile.SpooledTemporaryFile>
+---
 
-This means the endpoint currently assumes every uploaded file is an image.
+# 1. Preserve Existing OCR Processing
 
-IMPLEMENTATION
+Do NOT modify or replace the current PaddleOCR implementation unless required.
 
-1. Detect the uploaded file type before passing it to PIL.
+The current server is already successfully processing images such as:
 
-Supported:
+```text
+ANIKET-pass.png
+ANIKET-pan.png
+deshpande-back.png
+deshpande-pan.png
+```
 
-    Images:
-      PNG
-      JPG/JPEG
-      WEBP
-      TIFF
-      BMP
+The server is producing extracted fields such as:
 
-    PDF:
-      application/pdf
-      .pdf
+```json
+{
+  "passport_number": "Y3647377",
+  "surname": "GHOSH",
+  "given_name": "ANIKET",
+  "date_of_birth": "01/10/2000"
+}
+```
 
-2. Keep the existing image path completely unchanged.
+and:
 
-3. For PDF files:
+```json
+{
+  "pan_number": "CUDPG6208B",
+  "name": "ANIKET GHOSH",
+  "father_name": "ASIM GHOSH",
+  "date_of_birth": "13/12/1969"
+}
+```
 
-    uploaded PDF
+Keep this extraction functionality intact.
+
+---
+
+# 2. Fix CORS
+
+The frontend is running on a different origin from the OCR server.
+
+Typical setup:
+
+```text
+my-ocr-parser
+http://localhost:3000
+
         ↓
-    render each page to an image
-        ↓
-    pass each page through the EXISTING OCR pipeline
-        ↓
-    collect OCR results
-        ↓
-    return combined page results
 
-4. Use PyMuPDF (`fitz`) for PDF rendering.
+ocr-server
+http://localhost:5000
+```
+
+Configure Flask CORS so browser requests from the frontend are allowed.
 
 Install:
 
-    .\venv\Scripts\python.exe -m pip install pymupdf
+```bash
+pip install flask-cors
+```
 
-Do not require Poppler if PyMuPDF can handle the rendering directly.
+Add:
 
-5. Render PDF pages at a suitable DPI.
+```python
+from flask_cors import CORS
+```
 
-Start with approximately 200–250 DPI.
+Then configure:
 
-Do not unnecessarily render at extremely high resolution because OCR performance matters.
-
-6. Each PDF page must go through the same preprocessing/OCR pipeline currently used for images.
-
-Do NOT create a separate OCR implementation for PDFs.
-
-The flow should effectively be:
-
-    PDF page
-       ↓
-    PIL Image
-       ↓
-    existing adaptive OCR
-       ↓
-    existing document/parser logic
-
-7. Return page-level results.
-
-Use a structure similar to:
-
-{
-    "success": true,
-    "file_type": "pdf",
-    "pages": [
-        {
-            "page": 1,
-            "document_type": "...",
-            "text": "...",
-            "fields": {...}
-        },
-        {
-            "page": 2,
-            "document_type": "...",
-            "text": "...",
-            "fields": {...}
+```python
+CORS(
+    app,
+    resources={
+        r"/ocr": {
+            "origins": [
+                "http://localhost:3000",
+                "http://127.0.0.1:3000"
+            ]
         }
-    ]
+    }
+)
+```
+
+If the project already has CORS configuration, modify the existing configuration instead of creating a second one.
+
+---
+
+# 3. Support Development Origins
+
+During development, support both:
+
+```text
+http://localhost:3000
+http://127.0.0.1:3000
+```
+
+Do not use:
+
+```python
+CORS(app, origins="*")
+```
+
+unless there is a specific reason.
+
+The goal is to allow the local frontend while keeping the configuration explicit.
+
+Make the allowed origins configurable through environment variables if practical.
+
+For example:
+
+```env
+FRONTEND_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+```
+
+---
+
+# 4. Standardize `/ocr` Response
+
+The `/ocr` endpoint must always return valid JSON.
+
+Successful response should have a predictable structure.
+
+Use something similar to:
+
+```json
+{
+  "success": true,
+  "filename": "ANIKET-pass.png",
+  "document_type": "PASSPORT_FRONT",
+  "engine": "paddle",
+  "processing_time": 44.86,
+  "data": {
+    "passport_number": "Y3647377",
+    "surname": "GHOSH",
+    "given_name": "ANIKET",
+    "date_of_birth": "01/10/2000",
+    "sex": "M",
+    "place_of_birth": "BERHAMPORE, WEST BENGAL",
+    "place_of_issue": "KOLKATA",
+    "date_of_issue": "19/06/2024",
+    "date_of_expiry": "18/06/2034"
+  },
+  "raw_text": "...",
+  "message": "OCR completed successfully"
 }
+```
 
-Preserve the existing response structure as much as possible for normal image uploads.
+For PAN:
 
-8. Do not modify:
+```json
+{
+  "success": true,
+  "filename": "ANIKET-pan.png",
+  "document_type": "PAN",
+  "engine": "paddle",
+  "processing_time": 34.64,
+  "data": {
+    "pan_number": "CUDPG6208B",
+    "name": "ANIKET GHOSH",
+    "father_name": "ASIM GHOSH",
+    "date_of_birth": "01/10/2000"
+  },
+  "raw_text": "...",
+  "message": "OCR completed successfully"
+}
+```
 
-    - Passport Front parser
-    - Passport Back parser
-    - PAN parser
-    - adaptive preprocessing
-    - MRZ authority logic
-    - OCR candidate scoring
-    - dashboard behavior
+The exact existing field names should be preserved where possible.
 
-unless absolutely necessary to support page-level PDF results.
+---
 
-9. Add clear validation:
+# 5. Never Return HTML for API Errors
 
-    - reject unsupported file types
-    - handle empty PDFs
-    - handle corrupted PDFs
-    - handle password-protected PDFs gracefully
-    - return a useful HTTP error instead of a Python traceback
+The frontend should never receive an unexpected Flask HTML error page from `/ocr`.
 
-10. Do not save uploaded PDFs permanently unless the existing application
-    already requires that behavior.
+All expected API errors should return JSON.
 
-Prefer processing PDF pages in memory.
+Example:
 
-TESTING
+```json
+{
+  "success": false,
+  "error": {
+    "code": "INVALID_FILE",
+    "message": "Unsupported file type"
+  }
+}
+```
 
-Test the existing image endpoint first:
+Use appropriate HTTP status codes:
 
-    PNG
-    JPG/JPEG
+```text
+400 → invalid request/file
+413 → file too large
+415 → unsupported file type
+500 → server processing error
+```
+
+---
+
+# 6. Handle Missing File
+
+If the frontend sends:
+
+```text
+POST /ocr
+```
+
+without a file, return:
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "FILE_REQUIRED",
+    "message": "No file was provided"
+  }
+}
+```
+
+with:
+
+```text
+HTTP 400
+```
+
+Do not allow the request to reach the OCR engine.
+
+---
+
+# 7. Validate File Type
+
+Continue supporting the formats already supported by the server:
+
+```text
+.png
+.jpg
+.jpeg
+.webp
+.bmp
+.tif
+.tiff
+.pdf
+```
+
+Reject unsupported files cleanly.
+
+Example:
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "UNSUPPORTED_FILE_TYPE",
+    "message": "Unsupported file type: .xyz"
+  }
+}
+```
+
+---
+
+# 8. Preserve Document Type Detection
+
+The server currently identifies documents such as:
+
+```text
+PASSPORT_FRONT
+PAN
+```
+
+Keep this behavior.
+
+The response should expose the detected type:
+
+```json
+"document_type": "PASSPORT_FRONT"
+```
+
+or:
+
+```json
+"document_type": "PAN"
+```
+
+This allows `my-ocr-parser` to understand what the OCR server returned without implementing its own document classification logic.
+
+---
+
+# 9. Return Extracted Fields Separately
+
+Do not force the frontend to parse raw OCR text.
+
+Bad:
+
+```json
+{
+  "text": "INCOME TAX DEPARTMENT ... CUDPG6208B ..."
+}
+```
+
+Instead return:
+
+```json
+{
+  "data": {
+    "pan_number": "CUDPG6208B",
+    "name": "ANIKET GHOSH",
+    "father_name": "ASIM GHOSH",
+    "date_of_birth": "01/10/2000"
+  }
+}
+```
+
+Raw OCR text can still be included for debugging:
+
+```json
+"raw_text": "..."
+```
+
+---
+
+# 10. Keep Raw OCR Logging
+
+Continue the existing detailed server logging.
+
+The logs should show:
+
+```text
+OCR JOB START
+Image       : ANIKET-pan.png
+Type        : PAN
+Engine      : paddle
+Model       : paddleocr_v3
+Processing time: 34.64 seconds
+
+RAW PADDLE OUTPUT
+...
+
+CLEANED OCR OUTPUT
+...
+
+EXTRACTED FIELDS
+pan_number : CUDPG6208B
+name       : ANIKET GHOSH
+...
+```
+
+This is useful for debugging OCR quality.
+
+Do not remove these logs.
+
+---
+
+# 11. Add API Request/Response Logging
+
+Add a concise API-level log around each `/ocr` request.
+
+Example:
+
+```text
+[API] POST /ocr
+[API] filename=ANIKET-pan.png
+[API] content_type=image/png
+[API] request_id=abc123
+```
+
+After processing:
+
+```text
+[API] request_id=abc123
+[API] status=200
+[API] document_type=PAN
+[API] processing_time=34.64s
+```
+
+For failures:
+
+```text
+[API] request_id=abc123
+[API] status=500
+[API] error=OCR_PROCESSING_FAILED
+```
+
+Use a request ID so frontend and server logs can be correlated.
+
+---
+
+# 12. Add Health Endpoint
+
+Add:
+
+```text
+GET /health
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "service": "ocr-server"
+}
+```
+
+This allows `my-ocr-parser` to verify that the OCR server is reachable before starting a long OCR operation.
+
+---
+
+# 13. Add CORS Verification Endpoint
+
+Optionally add:
+
+```text
+GET /health
+```
+
+and verify from the browser.
+
+The response should include the appropriate:
+
+```text
+Access-Control-Allow-Origin
+```
+
+header when called from:
+
+```text
+http://localhost:3000
+```
+
+---
+
+# 14. Do Not Change OCR Processing Time Yet
+
+The current PaddleOCR processing can take tens of seconds.
+
+For example, the server successfully processed:
+
+```text
+Passport: ~44.86s
+PAN: ~34.64s
+```
+
+The frontend must therefore treat `/ocr` as a long-running request.
+
+Do not introduce arbitrary frontend timeouts such as:
+
+```text
+10 seconds
+20 seconds
+30 seconds
+```
+
+unless the timeout is intentionally configured to exceed expected OCR processing time.
+
+---
+
+# 15. Make the API Response Available Only After OCR Completes
+
+The `/ocr` request should behave synchronously:
+
+```text
+POST /ocr
+      ↓
+Receive image
+      ↓
+Run PaddleOCR
+      ↓
+Extract fields
+      ↓
+Build JSON response
+      ↓
+HTTP 200
+```
+
+The frontend should receive the extracted JSON directly from that request.
+
+Do not write the result only to a server log or local file and expect the frontend to retrieve it separately.
+
+---
+
+# 16. Verify Multipart Upload
+
+The frontend is expected to send the image using `multipart/form-data`.
+
+The server should support something like:
+
+```text
+POST /ocr
+Content-Type: multipart/form-data
+```
+
+with:
+
+```text
+file=<image>
+```
+
+Make sure the server reads the same field name expected by `my-ocr-parser`.
+
+If the frontend currently sends:
+
+```text
+file
+```
+
+then preserve that.
+
+Do not arbitrarily rename it to:
+
+```text image
+```
+
+without updating the frontend.
+
+---
+
+# 17. Test Using curl
+
+Before testing through the frontend, test the API directly.
+
+For example:
+
+```bash
+curl -X POST http://localhost:5000/ocr \
+  -F "file=@ANIKET-pass.png"
+```
 
 Expected:
-    existing behavior unchanged.
 
-Then test:
+```text
+HTTP 200
+```
 
-    1-page PDF
-    multi-page PDF
+and JSON containing:
+
+```json
+{
+  "success": true,
+  "data": {
+    "passport_number": "Y3647377"
+  }
+}
+```
+
+Then test PAN:
+
+```bash
+curl -X POST http://localhost:5000/ocr \
+  -F "file=@ANIKET-pan.png"
+```
+
+Expected:
+
+```json
+{
+  "success": true,
+  "data": {
+    "pan_number": "CUDPG6208B"
+  }
+}
+```
+
+---
+
+# 18. Test CORS From Browser
+
+After starting the OCR server, open the frontend:
+
+```text
+http://localhost:3000
+```
+
+Process a passport.
+
+In DevTools:
+
+```text
+F12
+→ Network
+→ Fetch/XHR
+→ /ocr
+```
 
 Verify:
 
-    page count
-    OCR text per page
-    extracted fields per page
-    document classification per page
+```text
+Request → 200
+Response → JSON
+Response Headers → Access-Control-Allow-Origin
+```
 
-Also test a PDF containing:
+There must be no:
 
-    Passport Front
-    Passport Back
-    PAN
+```text
+CORS policy
+Failed to fetch
+NetworkError
+```
 
-if available.
+---
 
-REGRESSION
+# 19. Verify End-to-End Flow
 
-Run:
+The final architecture should be:
 
-    Passport Front regression
-    Passport Back regression
-    PAN regression
-    full 20-image regression
+```text
+┌──────────────────────────────┐
+│       my-ocr-parser          │
+│       localhost:3000         │
+└──────────────┬───────────────┘
+               │
+               │ POST /ocr
+               │ multipart/form-data
+               ↓
+┌──────────────────────────────┐
+│         ocr-server           │
+│       localhost:5000         │
+│                              │
+│  CORS                        │
+│    ↓                         │
+│  File validation             │
+│    ↓                         │
+│  Document detection          │
+│    ↓                         │
+│  PaddleOCR                   │
+│    ↓                         │
+│  Field extraction            │
+│    ↓                         │
+│  JSON response               │
+└──────────────┬───────────────┘
+               │
+               │ HTTP 200 JSON
+               ↓
+┌──────────────────────────────┐
+│       my-ocr-parser          │
+│                              │
+│  Passport data               │
+│  PAN data                    │
+│       ↓                      │
+│  Passenger table             │
+└──────────────────────────────┘
+```
 
-Expected:
+---
 
-    0 document-type regressions
-    0 field regressions
+# 20. Important: Do Not Modify the Existing Invoice Pipeline
 
-PERFORMANCE
+The invoice pipeline is already working.
 
-Measure:
+For example, the existing server successfully:
 
-    image OCR time
-    PDF page rendering time
-    OCR time per PDF page
-    total PDF processing time
+* receives the invoice
+* extracts PDF text
+* parses invoice fields
+* validates arithmetic
+* normalizes fields
+* returns successful processing
 
-Do not optimize prematurely.
+Therefore this implementation should be **backward compatible**.
 
-IMPORTANT
+The new changes should primarily affect:
 
-The existing image OCR pipeline is working.
+```text
+API reliability
+CORS
+JSON response structure
+Error handling
+Logging
+Health checking
+```
 
-PDF support should be an INPUT/CONVERSION layer:
+Do not rewrite the invoice parser.
 
-    PDF → page image → existing OCR pipeline
+---
 
-Do not rewrite the OCR engine or parsers to support PDFs directly.
+# 21. Acceptance Criteria
+
+The implementation is complete when:
+
+### API
+
+* `/ocr` accepts image uploads.
+* `/ocr` accepts PDFs.
+* `/ocr` returns JSON.
+* Successful OCR returns HTTP 200.
+* Errors return JSON rather than HTML.
+* Passport extraction returns structured passport fields.
+* PAN extraction returns structured PAN fields.
+* Existing invoice extraction continues working.
+
+### Browser
+
+From `http://localhost:3000`:
+
+* `/ocr` can be called successfully.
+* No CORS error occurs.
+* No `Failed to fetch` occurs when the server is healthy.
+* Frontend can read the JSON response.
+
+### Debugging
+
+Server logs clearly show:
+
+```text
+request ID
+filename
+document type
+OCR engine
+processing time
+status
+```
+
+### Compatibility
+
+Do not break:
+
+* existing invoice processing
+* PDF processing
+* PaddleOCR
+* existing dashboard
+* existing OCR endpoints
+* existing document types
+
+---
+
+# Final Principle
+
+The OCR server is already doing the difficult part — **PaddleOCR is processing the documents and extracting the data successfully**.
+
+The implementation should now make the server behave as a clean API:
+
+```text
+IMAGE
+  ↓
+OCR
+  ↓
+STRUCTURED JSON
+  ↓
+HTTP 200
+  ↓
+FRONTEND
+```
+
+The frontend should never have to read server logs to obtain OCR data.

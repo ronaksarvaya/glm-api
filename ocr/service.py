@@ -1,11 +1,14 @@
 import os
 from .glm_ocr import GlmOcrEngine
 from .existing_ocr import ExistingOcrEngine
+from .paddle_ocr import PaddleOcrEngine
 
 def get_ocr_engine():
-    engine_type = os.environ.get("OCR_ENGINE", "existing").lower()
+    engine_type = os.environ.get("OCR_ENGINE", "existing").strip().lower()
     
-    if engine_type == "glm_ocr":
+    if engine_type == "paddle":
+        return PaddleOcrEngine()
+    elif engine_type == "glm_ocr":
         return GlmOcrEngine()
     
     return ExistingOcrEngine()
@@ -33,14 +36,19 @@ def print_debug_info(filename, document_type, result, fields):
     print("-" * 60)
     print(f"RAW {engine.upper()} OUTPUT")
     print("-" * 60)
-    print()
-    print(raw)
+    try:
+        print(raw)
+    except UnicodeEncodeError:
+        print(raw.encode('ascii', 'replace').decode('ascii'))
     print()
     print("-" * 60)
     print("CLEANED OCR OUTPUT")
     print("-" * 60)
     print()
-    print(clean)
+    try:
+        print(clean)
+    except UnicodeEncodeError:
+        print(clean.encode('ascii', 'replace').decode('ascii'))
     print()
     print("-" * 60)
     print("EXTRACTED FIELDS")
